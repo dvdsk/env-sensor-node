@@ -8,6 +8,7 @@ use embassy_net_wiznet::chip::W5500;
 use embassy_net_wiznet::*;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
+use embassy_stm32::i2c::I2c;
 use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::SPI1;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
@@ -20,6 +21,11 @@ use heapless::Vec;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+embassy_stm32::bind_interrupts!(struct Irqs {
+    I2C3_EV => embassy_stm32::i2c::EventInterruptHandler<embassy_stm32::peripherals::I2C3>;
+    I2C3_ER => embassy_stm32::i2c::ErrorInterruptHandler<embassy_stm32::peripherals::I2C3>;
+});
 
 #[embassy_executor::task]
 async fn ethernet_task(
@@ -79,6 +85,26 @@ async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(config());
     let mut led = Output::new(p.PC13, Level::Low, Speed::Low);
     let seed = gen_random_number().await;
+
+    let i2c = I2c::new(
+        p.I2C3,
+        p.PA8,
+        p.PB4,
+        Irqs,
+        p.DMA1_CH4,
+        p.DMA1_CH2,
+        Hertz(50_000),
+        Default::default(),
+    );
+
+    let bme_config = bosch_bme680::Configuration::default();
+    let mut bme = unwrap!(bosch_bme680::Bme680::new(
+        i2c,
+        bosch_bme680::DeviceAddress::Secondary,
+        Delay,
+        &bme_config,
+        20
+    ).await);
 
     let mut spi_cfg = SpiConfig::default();
     spi_cfg.frequency = Hertz(50_000_000); // todo increase
@@ -145,7 +171,9 @@ async fn main(spawner: Spawner) {
                 warn!("write error: {:?}", e);
                 break;
             }
-            Timer::after_millis(50).await;
+            Timer::after_millis(1000).await;
+            let value = unwrap!(bme.measure().await);
+            info!("bme measured: {}", value);
         }
     }
 }
