@@ -2,7 +2,9 @@
 #![no_main]
 
 use defmt::*;
+use embassy_embedded_hal::shared_bus;
 use embassy_executor::Spawner;
+use embassy_futures::join;
 use embassy_net::{Ipv4Address, Ipv4Cidr, Stack, StackResources};
 use embassy_net_wiznet::chip::W5500;
 use embassy_net_wiznet::*;
@@ -14,10 +16,13 @@ use embassy_stm32::peripherals::SPI1;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::Config;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_io_async::Write;
 use heapless::Vec;
+use max44009::{Max44009, SlaveAddr};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -96,15 +101,29 @@ async fn main(spawner: Spawner) {
         Hertz(50_000),
         Default::default(),
     );
+    let i2c: Mutex<NoopRawMutex, _> = Mutex::new(i2c);
 
     let bme_config = bosch_bme680::Configuration::default();
-    let mut bme = unwrap!(bosch_bme680::Bme680::new(
-        i2c,
-        bosch_bme680::DeviceAddress::Secondary,
-        Delay,
-        &bme_config,
-        20
-    ).await);
+    let mut bme = unwrap!(
+        bosch_bme680::Bme680::new(
+            shared_bus::asynch::i2c::I2cDevice::new(&i2c),
+            bosch_bme680::DeviceAddress::Secondary,
+            Delay,
+            &bme_config,
+            20
+        )
+        .await
+    );
+
+    let mut max44009 = Max44009::new(
+        shared_bus::asynch::i2c::I2cDevice::new(&i2c),
+        SlaveAddr::default(),
+    );
+    unwrap!(
+        max44009
+            .set_measurement_mode(max44009::MeasurementMode::Continuous)
+            .await
+    );
 
     let mut spi_cfg = SpiConfig::default();
     spi_cfg.frequency = Hertz(50_000_000); // todo increase
@@ -171,9 +190,12 @@ async fn main(spawner: Spawner) {
                 warn!("write error: {:?}", e);
                 break;
             }
-            Timer::after_millis(1000).await;
-            let value = unwrap!(bme.measure().await);
+            let bme_measure = bme.measure();
+            let max_measure = max44009.read_lux();
+            let (value, lux) = join::join(bme_measure, max_measure).await;
             info!("bme measured: {}", value);
+            info!("lux measured: {}", lux);
+            Timer::after_millis(1000).await;
         }
     }
 }

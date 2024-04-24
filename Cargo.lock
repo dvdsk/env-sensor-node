@@ -488,6 +488,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57b4e6ede84339ebdb418cd986e6320a34b017cdf99b5cc3efceec6450b06886"
 dependencies = [
  "critical-section",
+ "defmt",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
 ]
@@ -699,6 +700,7 @@ dependencies = [
  "cortex-m-rt",
  "defmt",
  "defmt-rtt",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",
@@ -712,6 +714,7 @@ dependencies = [
  "embedded-io-async",
  "futures",
  "heapless",
+ "max44009",
  "nb 1.1.0",
  "panic-probe",
  "rand",
@@ -729,6 +732,15 @@ name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
+name = "max44009"
+version = "0.2.0"
+source = "git+https://github.com/dvdsk/max44009-rs#caf5818d3aaa638c1c729e0ed50f3a700d54aa0b"
+dependencies = [
+ "defmt",
+ "embedded-hal-async",
+]
 
 [[package]]
 name = "nb"
