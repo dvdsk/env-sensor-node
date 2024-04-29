@@ -1,16 +1,16 @@
 #![no_std]
 #![no_main]
 
-use defmt::*;
+use crate::sensors::fast::ButtonInputs;
+use defmt::{info, unwrap};
 use embassy_embedded_hal::shared_bus;
 use embassy_executor::Spawner;
 use embassy_futures::join;
 use embassy_net::{Ipv4Address, Ipv4Cidr, Stack, StackResources};
-use embassy_net_wiznet::chip::W5500;
-use embassy_net_wiznet::*;
+use embassy_net_wiznet::{chip::W5500, Device, Runner, State};
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
-use embassy_stm32::i2c::I2c;
+use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::SPI1;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
@@ -18,29 +18,28 @@ use embassy_stm32::time::Hertz;
 use embassy_stm32::Config;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Delay, Duration, Timer};
+use embassy_sync::priority_channel::PriorityChannel;
+use embassy_time::Delay;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_io_async::Write;
 use heapless::Vec;
 use max44009::{Max44009, SlaveAddr};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use static_cell::StaticCell;
+
 use {defmt_rtt as _, panic_probe as _};
 
+mod network;
+mod sensors;
+
 embassy_stm32::bind_interrupts!(struct Irqs {
-    I2C3_EV => embassy_stm32::i2c::EventInterruptHandler<embassy_stm32::peripherals::I2C3>;
-    I2C3_ER => embassy_stm32::i2c::ErrorInterruptHandler<embassy_stm32::peripherals::I2C3>;
+    I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<embassy_stm32::peripherals::I2C1>;
+    I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<embassy_stm32::peripherals::I2C1>;
 });
 
+type EthernetSPI = ExclusiveDevice<Spi<'static, SPI1, Async>, Output<'static>, Delay>;
 #[embassy_executor::task]
 async fn ethernet_task(
-    runner: Runner<
-        'static,
-        W5500,
-        ExclusiveDevice<Spi<'static, SPI1, Async>, Output<'static>, Delay>,
-        ExtiInput<'static>,
-        Output<'static>,
-    >,
+    runner: Runner<'static, W5500, EthernetSPI, ExtiInput<'static>, Output<'static>>,
 ) -> ! {
     runner.run().await
 }
@@ -88,23 +87,23 @@ fn config() -> Config {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(config());
-    let mut led = Output::new(p.PC13, Level::Low, Speed::Low);
     let seed = gen_random_number().await;
 
     let i2c = I2c::new(
-        p.I2C3,
-        p.PA8,
-        p.PB4,
+        p.I2C1,
+        p.PB8,
+        p.PB9,
         Irqs,
-        p.DMA1_CH4,
-        p.DMA1_CH2,
-        Hertz(50_000),
-        Default::default(),
+        p.DMA1_CH7,
+        p.DMA1_CH0,
+        // extra slow, helps with longer cable runs
+        Hertz(10_000),
+        i2c::Config::default(),
     );
     let i2c: Mutex<NoopRawMutex, _> = Mutex::new(i2c);
 
     let bme_config = bosch_bme680::Configuration::default();
-    let mut bme = unwrap!(
+    let bme = unwrap!(
         bosch_bme680::Bme680::new(
             shared_bus::asynch::i2c::I2cDevice::new(&i2c),
             bosch_bme680::DeviceAddress::Secondary,
@@ -124,6 +123,22 @@ async fn main(spawner: Spawner) {
             .set_measurement_mode(max44009::MeasurementMode::Continuous)
             .await
     );
+
+    let sht = sht31::SHT31::new(shared_bus::asynch::i2c::I2cDevice::new(&i2c), Delay)
+        .with_mode(sht31::mode::SingleShot)
+        .with_unit(sht31::TemperatureUnit::Celsius)
+        .with_accuracy(sht31::Accuracy::High);
+
+    let buttons = ButtonInputs {
+        top_left: ExtiInput::new(p.PA13, p.EXTI13, Pull::Down),
+        top_right: ExtiInput::new(p.PA14, p.EXTI14, Pull::Down),
+        middle_inner: ExtiInput::new(p.PA9, p.EXTI9, Pull::Down),
+        middle_center: ExtiInput::new(p.PA10, p.EXTI10, Pull::Down),
+        middle_outer: ExtiInput::new(p.PA11, p.EXTI11, Pull::Down),
+        lower_inner: ExtiInput::new(p.PA12, p.EXTI12, Pull::Down),
+        lower_center: ExtiInput::new(p.PA15, p.EXTI15, Pull::Down),
+        lower_outer: ExtiInput::new(p.PB5, p.EXTI5, Pull::Down),
+    };
 
     let mut spi_cfg = SpiConfig::default();
     spi_cfg.frequency = Hertz(50_000_000); // todo increase
@@ -165,37 +180,13 @@ async fn main(spawner: Spawner) {
     ));
 
     // Launch network task
-    unwrap!(spawner.spawn(net_task(&stack)));
+    unwrap!(spawner.spawn(net_task(stack)));
 
-    let mut rx_buffer = [0; 800];
-    let mut tx_buffer = [0; 800];
-    loop {
-        Timer::after_secs(1).await;
-        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10)));
+    let publish = PriorityChannel::new();
 
-        led.set_low();
-        info!("Connecting...");
-        let host_addr = Ipv4Address::new(192, 168, 1, 46);
-        if let Err(e) = socket.connect((host_addr, 1234)).await {
-            warn!("connect error: {:?}", e);
-            continue;
-        }
-        info!("Connected to {:?}", socket.remote_endpoint());
-        // led.set_high();
+    let send_published = network::send_published(stack, &publish);
+    let sensors_fast = sensors::fast::read(max44009, buttons, &publish);
+    let sensors_slow = sensors::slow::read(sht, bme, &publish);
 
-        let msg = b"Hello world!\n";
-        loop {
-            if let Err(e) = socket.write_all(msg).await {
-                warn!("write error: {:?}", e);
-                break;
-            }
-            let bme_measure = bme.measure();
-            let max_measure = max44009.read_lux();
-            let (value, lux) = join::join(bme_measure, max_measure).await;
-            info!("bme measured: {}", value);
-            info!("lux measured: {}", lux);
-            Timer::after_millis(1000).await;
-        }
-    }
+    join::join3(send_published, sensors_fast, sensors_slow).await;
 }
