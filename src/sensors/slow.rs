@@ -17,7 +17,7 @@ use super::PriorityValue as PV;
 
 pub async fn read<I2C>(
     mut sht: SHT31<SingleShot, I2C>,
-    // mut bme: Bme680<I2C, impl DelayNs>,
+    mut bme: Bme680<I2C, impl DelayNs>,
     publish: &PriorityChannel<NoopRawMutex, PV, priority_channel::Max, 20>,
 ) where
     I2C: I2c,
@@ -30,28 +30,27 @@ pub async fn read<I2C>(
     loop {
         let sht_read = sht.read();
         yield_now().await;
-        // let bme_measure = bme.measure();
-        // yield_now().await;
-        // let (bme_res, sht_res) = join::join(bme_measure, sht_read).await;
-        let sht_res = sht_read.await;
+        let bme_measure = bme.measure();
+        yield_now().await;
+        let (bme_res, sht_res) = join::join(bme_measure, sht_read).await;
         yield_now().await;
 
-        // match bme_res {
-        //     Ok(MeasurementData {
-        //         pressure,
-        //         gas_resistance,
-        //         ..
-        //     }) => {
-        //         let gas_resistance = unwrap!(gas_resistance); // sensor is on
-        //         let _ignore = publish.try_send(PV::p0(LB::GassResistance(gas_resistance)));
-        //         let _ignore = publish.try_send(PV::p0(LB::Pressure(pressure)));
-        //     }
-        //     Err(err) => {
-        //         let err = protocol::large_bedroom::SensorError::Bme680(err.strip_generics());
-        //         let err = protocol::large_bedroom::Error::Running(err);
-        //         let _ignore = publish.try_send(PV::error(err));
-        //     }
-        // }
+        match bme_res {
+            Ok(MeasurementData {
+                pressure,
+                gas_resistance,
+                ..
+            }) => {
+                let gas_resistance = unwrap!(gas_resistance); // sensor is on
+                let _ignore = publish.try_send(PV::p0(LB::GassResistance(gas_resistance)));
+                let _ignore = publish.try_send(PV::p0(LB::Pressure(pressure)));
+            }
+            Err(err) => {
+                let err = protocol::large_bedroom::SensorError::Bme680(err.strip_generics());
+                let err = protocol::large_bedroom::Error::Running(err);
+                let _ignore = publish.try_send(PV::error(err));
+            }
+        }
 
         match sht_res {
             Ok(sht31::Reading {

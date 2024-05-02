@@ -89,24 +89,22 @@ pub async fn init_then_measure(
     use protocol::large_bedroom::Error;
     use protocol::large_bedroom::SensorError;
 
-    // info!("before bme config");
-    // let bme_config = bosch_bme680::Configuration::default();
-    // let bme = with_timeout(
-    //     Duration::from_millis(750),
-    //     bosch_bme680::Bme680::new(
-    //         shared_bus::asynch::i2c::I2cDevice::new(&i2c),
-    //         bosch_bme680::DeviceAddress::Secondary,
-    //         Delay,
-    //         &bme_config,
-    //         20,
-    //     ),
-    // )
-    // .await
-    // .map_err(|_| Error::SetupTimedOut(Device::Bme680))?
-    // .map_err(|err| err.strip_generics())
-    // .map_err(SensorError::Bme680)
-    // .map_err(Error::Setup)?;
-    // info!("after bme config");
+    let bme_config = bosch_bme680::Configuration::default();
+    let bme = with_timeout(
+        Duration::from_secs(12),
+        bosch_bme680::Bme680::new(
+            shared_bus::asynch::i2c::I2cDevice::new(&i2c),
+            bosch_bme680::DeviceAddress::Secondary,
+            Delay,
+            &bme_config,
+            20,
+        ),
+    )
+    .await
+    .map_err(|_| Error::SetupTimedOut(Device::Bme680))?
+    .map_err(|err| err.strip_generics())
+    .map_err(SensorError::Bme680)
+    .map_err(Error::Setup)?;
 
     let mut max44009 = Max44009::new(
         shared_bus::asynch::i2c::I2cDevice::new(&i2c),
@@ -128,7 +126,7 @@ pub async fn init_then_measure(
         .with_accuracy(sht31::Accuracy::High);
 
     let sensors_fast = fast::read(max44009, /*buttons,*/ &publish);
-    let sensors_slow = slow::read(sht, /*bme,*/ &publish);
+    let sensors_slow = slow::read(sht, bme, &publish);
     join::join(sensors_fast, sensors_slow).await;
 
     defmt::unreachable!();
