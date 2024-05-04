@@ -4,17 +4,14 @@ use embassy_futures::{
     yield_now,
 };
 use embassy_stm32::exti::ExtiInput;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::priority_channel::{self, PriorityChannel};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_async::i2c::I2c;
-use futures::future::join5;
 use max44009::Max44009;
 
-use protocol::extended_errors::ConcreteErrorType;
-use protocol::large_bedroom::{self, BedButton, LargeBedroom as LB};
+use crate::channel::Channel;
 
-use super::PriorityValue as PV;
+use protocol::downcast_err::{ConcreteErrorType, I2cError};
+use protocol::large_bedroom::{self, BedButton, LargeBedroom as LB};
 
 fn sig_lux_diff(old: f32, new: f32) -> bool {
     let diff = old - new;
@@ -24,16 +21,17 @@ fn sig_lux_diff(old: f32, new: f32) -> bool {
 
 async fn report_lux<I2C>(
     mut max44: Max44009<I2C>,
-    publish: &PriorityChannel<NoopRawMutex, PV, priority_channel::Max, 20>,
+    publish: &Channel,
 ) where
     I2C: I2c,
     I2C::Error: defmt::Format,
-    <I2C as embedded_hal_async::i2c::ErrorType>::Error: Into<protocol::extended_errors::I2cError>,
+    <I2C as embedded_hal_async::i2c::ErrorType>::Error: Into<I2cError>,
 {
     let mut prev_lux = f32::MAX;
     let mut last_lux = Instant::now();
     const MIN_INTERVAL: Duration = Duration::from_secs(1);
 
+    // todo!("reinit devices after error");
     loop {
         Timer::after_millis(50).await;
         let lux = match max44.read_lux().await {
@@ -41,16 +39,16 @@ async fn report_lux<I2C>(
             Err(err) if last_lux.elapsed() > MIN_INTERVAL => {
                 let err = large_bedroom::SensorError::Max44(err.strip_generics());
                 let err = large_bedroom::Error::Running(err);
-                let _ignore = publish.try_send(PV::error(err));
+                let _ignore = publish.send_error(err);
                 continue;
             }
             Err(_) => continue,
         };
 
         let msg = if sig_lux_diff(prev_lux, lux) {
-            PV::p2(LB::Brightness(lux))
+            publish.send_p2(LB::Brightness(lux))
         } else if last_lux.elapsed() > MIN_INTERVAL {
-            PV::p1(LB::Brightness(lux))
+            publish.send_p1(LB::Brightness(lux))
         } else {
             yield_now().await;
             continue;
@@ -58,11 +56,9 @@ async fn report_lux<I2C>(
 
         prev_lux = lux;
         last_lux = Instant::now();
-        let _ignore_full_channel = publish.try_send(msg);
     }
 }
 
-type Channel = PriorityChannel<NoopRawMutex, PV, priority_channel::Max, 20>;
 async fn watch_button(
     mut input: ExtiInput<'static>,
     event: impl Fn(protocol::Press) -> BedButton,
@@ -79,8 +75,7 @@ async fn watch_button(
                     continue;
                 };
                 let event = (event)(protocol::Press(press));
-                let value = PV::p2(LB::BedButton(event));
-                let _ignore_full_channel = channel.try_send(value);
+                let _ignore_full = channel.send_p2(LB::BedButton(event));
             }
         } else {
             input.wait_for_rising_edge().await;
@@ -103,11 +98,11 @@ pub struct ButtonInputs {
 pub async fn read<I2C>(
     max44: Max44009<I2C>,
     /*inputs: ButtonInputs,*/
-    publish: &PriorityChannel<NoopRawMutex, PV, priority_channel::Max, 20>,
+    publish: &Channel,
 ) where
     I2C: I2c,
     I2C::Error: defmt::Format,
-    <I2C as embedded_hal_async::i2c::ErrorType>::Error: Into<protocol::extended_errors::I2cError>,
+    <I2C as embedded_hal_async::i2c::ErrorType>::Error: Into<I2cError>,
 {
     // let watch_buttons_1 = join5(
     //     watch_button(inputs.top_left, BedButton::TopLeft, publish),

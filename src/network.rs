@@ -1,19 +1,19 @@
-use crate::sensors::PriorityValue;
 use defmt::{info, unwrap, warn};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Ipv4Address, Stack};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::priority_channel::{self, PriorityChannel};
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use embedded_io_async::Write;
 use protocol::SensorMessage;
 
+use crate::channel::Channel;
+
 type Msg = SensorMessage<6>;
 
 async fn get_messages(
-    publish: &PriorityChannel<NoopRawMutex, PriorityValue, priority_channel::Max, 20>,
+    publish: &Channel,
     msg: &mut Msg,
 ) {
     msg.values.clear();
@@ -38,7 +38,7 @@ async fn get_messages(
         }
     } else {
         while msg.space_left() {
-            let Ok(next) = publish.try_receive() else {
+            let Some(next) = publish.next_ready() else {
                 break;
             };
             unwrap!(msg.values.push(next.value));
@@ -48,7 +48,7 @@ async fn get_messages(
 
 pub async fn send_published(
     stack: &Stack<impl Driver>,
-    publish: &PriorityChannel<NoopRawMutex, PriorityValue, priority_channel::Max, 20>,
+    publish: &Channel,
     network_up: &Signal<NoopRawMutex, ()>,
 ) {
     let mut rx_buffer = [0; 800];

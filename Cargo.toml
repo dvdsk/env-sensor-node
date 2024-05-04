@@ -34,7 +34,8 @@ static_cell = "2.0.0"
 # sensors
 bosch-bme680 = { version = "1.0.2", git = "https://github.com/dvdsk/async-bosch-bme680" }
 max44009 = { version = "0.2", git = "https://github.com/dvdsk/max44009-rs" }
-sht31 = { version = "0.3.0", git = "https://github.com/dvdsk/SHT31-rs", features = ["postcard", "serde"] }
+sht31 = { version = "0.3.0", git = "https://github.com/dvdsk/SHT31-rs", features = ["postcard"] }
+mhzx = { version = "0.3.0", git = "https://github.com/dvdsk/mhzx", features = ["postcard"] }
 
 # encoding
 protocol = { path = "/home/david/Documents/HomeAutomation/crates/protocol" }

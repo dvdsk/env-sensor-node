@@ -1,89 +1,24 @@
-use defmt::info;
 use embassy_embedded_hal::shared_bus;
 use embassy_futures::join;
 use embassy_stm32::i2c::I2c;
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::I2C1;
+use embassy_stm32::peripherals::{I2C1, USART1};
+use embassy_stm32::usart::Uart;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::priority_channel::PriorityChannel;
-use protocol::large_bedroom::{self, LargeBedroom};
-use protocol::Sensor;
-
 use embassy_time::{with_timeout, Delay, Duration};
 use max44009::{Max44009, SlaveAddr};
-use protocol::extended_errors::ConcreteErrorType;
+use protocol::downcast_err::ConcreteErrorType;
+
+use crate::channel::Channel;
 
 pub mod fast;
 pub mod slow;
 
-/// Higher prio will be send earlier
-pub struct PriorityValue {
-    priority: u8,
-    pub value: Sensor,
-}
-
-impl PriorityValue {
-    pub fn low_priority(&self) -> bool {
-        self.priority < 2
-    }
-    pub fn error(error: large_bedroom::Error) -> Self {
-        Self {
-            priority: 0,
-            value: Sensor::LargeBedroomError(error),
-        }
-    }
-
-    fn p0(value: LargeBedroom) -> Self {
-        Self {
-            priority: 0,
-            value: Sensor::LargeBedroom(value),
-        }
-    }
-    fn p1(value: LargeBedroom) -> Self {
-        Self {
-            priority: 1,
-            value: Sensor::LargeBedroom(value),
-        }
-    }
-
-    fn p2(value: LargeBedroom) -> PriorityValue {
-        Self {
-            priority: 2,
-            value: Sensor::LargeBedroom(value),
-        }
-    }
-
-    pub fn critical_error(error: large_bedroom::Error) -> Self {
-        Self {
-            priority: 10,
-            value: Sensor::LargeBedroomError(error),
-        }
-    }
-}
-
-impl Eq for PriorityValue {}
-impl PartialEq for PriorityValue {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority.eq(&other.priority)
-    }
-}
-
-impl PartialOrd for PriorityValue {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.priority.cmp(&other.priority))
-    }
-}
-
-impl Ord for PriorityValue {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.priority.cmp(&other.priority)
-    }
-}
-
 pub async fn init_then_measure(
-    publish: &PriorityChannel<NoopRawMutex, PriorityValue, embassy_sync::priority_channel::Max, 20>,
+    publish: &Channel,
     i2c: Mutex<NoopRawMutex, I2c<'static, I2C1, Async>>,
+    usart: Uart<'static, USART1, Async>,
 ) -> Result<(), protocol::large_bedroom::Error> {
     use protocol::large_bedroom::Device;
     use protocol::large_bedroom::Error;
@@ -125,8 +60,13 @@ pub async fn init_then_measure(
         .with_unit(sht31::TemperatureUnit::Celsius)
         .with_accuracy(sht31::Accuracy::High);
 
+    let (tx, rx) = usart.split();
+    let mut usart_buf = [0u8; 9*10]; // 9 byte messages
+    let rx = rx.into_ring_buffered(&mut usart_buf);
+    let mhz = mhzx::MHZ::from_tx_rx(tx, rx);
+
     let sensors_fast = fast::read(max44009, /*buttons,*/ &publish);
-    let sensors_slow = slow::read(sht, bme, &publish);
+    let sensors_slow = slow::read(sht, bme, mhz, &publish);
     join::join(sensors_fast, sensors_slow).await;
 
     defmt::unreachable!();
