@@ -1,4 +1,4 @@
-use defmt::unwrap;
+use defmt::{unwrap, warn};
 use embassy_futures::{join, yield_now};
 use embassy_time::{with_timeout, Duration, Timer};
 use embedded_hal_async::delay::DelayNs;
@@ -7,17 +7,21 @@ use embedded_hal_async::i2c::I2c;
 use protocol::downcast_err::{ConcreteErrorType, I2cError, UartError};
 use protocol::large_bedroom::{Device, LargeBedroom as LB};
 
-use bosch_bme680::{Bme680, MeasurementData};
+use bosch_bme680::{Bme680, BmeError, MeasurementData};
 use sht31::mode::{Sht31Measure, Sht31Reader, SingleShot};
-use sht31::SHT31;
+use sht31::{SHTError, SHT31};
 
 use crate::channel::Channel;
+use crate::sensors::BussErrId;
+
+use super::BussErrTracker;
 
 pub async fn read<I2C, TX, RX>(
     mut sht: SHT31<SingleShot, I2C>,
     mut bme: Bme680<I2C, impl DelayNs>,
     mut mhz: mhzx::MHZ<TX, RX>,
-    publish: &Channel
+    publish: &Channel,
+    buss_errors: &BussErrTracker,
 ) where
     I2C: I2c,
     I2C::Error: defmt::Format,
@@ -31,6 +35,10 @@ pub async fn read<I2C, TX, RX>(
     Timer::after_secs(1).await;
 
     loop {
+        if buss_errors.all_err() {
+            warn!("entire I2C bus failed");
+        }
+
         let sht_read = with_timeout(Duration::from_millis(100), sht.read());
         yield_now().await;
         let bme_measure = bme.measure();
@@ -50,8 +58,12 @@ pub async fn read<I2C, TX, RX>(
                 let gas_resistance = unwrap!(gas_resistance); // sensor is on
                 publish.send_p0(LB::GassResistance(gas_resistance));
                 publish.send_p0(LB::Pressure(pressure));
+                buss_errors.unset(BussErrId::Bme);
             }
             Err(err) => {
+                if let BmeError::WriteError(_) | BmeError::WriteReadError(_) = &err {
+                    buss_errors.set(BussErrId::Bme);
+                }
                 let err = protocol::large_bedroom::SensorError::Bme680(err.strip_generics());
                 let err = protocol::large_bedroom::Error::Running(err);
                 publish.send_error(err)
@@ -65,15 +77,23 @@ pub async fn read<I2C, TX, RX>(
             })) => {
                 publish.send_p0(LB::Temperature(temperature));
                 publish.send_p0(LB::Humidity(humidity));
+                buss_errors.unset(BussErrId::Sht);
             }
             Ok(Err(err)) => {
+                if let SHTError::ReadI2CError
+                | SHTError::WriteI2CError
+                | SHTError::WriteReadI2CError = err
+                {
+                    buss_errors.set(BussErrId::Sht);
+                };
+
                 let err = protocol::large_bedroom::SensorError::Sht31(err);
                 let err = protocol::large_bedroom::Error::Running(err);
-                publish.send_error(err)
+                publish.send_error(err);
             }
             Err(_timeout) => {
                 let err = protocol::large_bedroom::Error::Timeout(Device::Sht31);
-                publish.send_error(err)
+                publish.send_error(err);
             }
         }
 

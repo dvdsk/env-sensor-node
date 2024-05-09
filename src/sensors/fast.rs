@@ -8,10 +8,12 @@ use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_async::i2c::I2c;
 use max44009::Max44009;
 
-use crate::channel::Channel;
+use crate::{channel::Channel, sensors::BussErrId};
 
 use protocol::downcast_err::{ConcreteErrorType, I2cError};
 use protocol::large_bedroom::{self, BedButton, LargeBedroom as LB};
+
+use super::BussErrTracker;
 
 fn sig_lux_diff(old: f32, new: f32) -> bool {
     let diff = old - new;
@@ -19,10 +21,8 @@ fn sig_lux_diff(old: f32, new: f32) -> bool {
     diff > old / 20.0 || -diff > old / 20.0
 }
 
-async fn report_lux<I2C>(
-    mut max44: Max44009<I2C>,
-    publish: &Channel,
-) where
+async fn report_lux<I2C>(mut max44: Max44009<I2C>, publish: &Channel, buss_errors: &BussErrTracker)
+where
     I2C: I2c,
     I2C::Error: defmt::Format,
     <I2C as embedded_hal_async::i2c::ErrorType>::Error: Into<I2cError>,
@@ -37,6 +37,9 @@ async fn report_lux<I2C>(
         let lux = match max44.read_lux().await {
             Ok(lux) => lux,
             Err(err) if last_lux.elapsed() > MIN_INTERVAL => {
+                if let max44009::Error::I2C(_) = err {
+                    buss_errors.set(BussErrId::Max);
+                }
                 let err = large_bedroom::SensorError::Max44(err.strip_generics());
                 let err = large_bedroom::Error::Running(err);
                 let _ignore = publish.send_error(err);
@@ -45,14 +48,15 @@ async fn report_lux<I2C>(
             Err(_) => continue,
         };
 
-        let msg = if sig_lux_diff(prev_lux, lux) {
+        buss_errors.unset(BussErrId::Max);
+        if sig_lux_diff(prev_lux, lux) {
             publish.send_p2(LB::Brightness(lux))
         } else if last_lux.elapsed() > MIN_INTERVAL {
             publish.send_p1(LB::Brightness(lux))
         } else {
             yield_now().await;
             continue;
-        };
+        }
 
         prev_lux = lux;
         last_lux = Instant::now();
@@ -99,6 +103,7 @@ pub async fn read<I2C>(
     max44: Max44009<I2C>,
     /*inputs: ButtonInputs,*/
     publish: &Channel,
+    buss_errors: &BussErrTracker,
 ) where
     I2C: I2c,
     I2C::Error: defmt::Format,
@@ -118,7 +123,7 @@ pub async fn read<I2C>(
     //     watch_button(inputs.lower_outer, BedButton::LowerOuter, publish),
     // );
 
-    let watch_lux = report_lux(max44, publish);
+    let watch_lux = report_lux(max44, publish, buss_errors);
     watch_lux.await;
     // join::join3(watch_buttons_1, watch_buttons_2, watch_lux).await;
 }

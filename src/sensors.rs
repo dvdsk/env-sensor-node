@@ -1,3 +1,6 @@
+use core::sync::atomic::{AtomicU8, Ordering};
+
+use defmt::dbg;
 use embassy_embedded_hal::shared_bus;
 use embassy_futures::join;
 use embassy_stm32::i2c::I2c;
@@ -61,13 +64,38 @@ pub async fn init_then_measure(
         .with_accuracy(sht31::Accuracy::High);
 
     let (tx, rx) = usart.split();
-    let mut usart_buf = [0u8; 9*10]; // 9 byte messages
+    let mut usart_buf = [0u8; 9 * 10]; // 9 byte messages
     let rx = rx.into_ring_buffered(&mut usart_buf);
     let mhz = mhzx::MHZ::from_tx_rx(tx, rx);
 
-    let sensors_fast = fast::read(max44009, /*buttons,*/ &publish);
-    let sensors_slow = slow::read(sht, bme, mhz, &publish);
+    let buss_errors = BussErrTracker::new();
+    let sensors_fast = fast::read(max44009, /*buttons,*/ &publish, &buss_errors);
+    let sensors_slow = slow::read(sht, bme, mhz, &publish, &buss_errors);
     join::join(sensors_fast, sensors_slow).await;
 
     defmt::unreachable!();
+}
+
+#[repr(u8)]
+enum BussErrId {
+    Bme = 0b0000_0001,
+    Sht = 0b0000_0010,
+    Max = 0b0000_0100,
+}
+
+pub struct BussErrTracker(AtomicU8);
+impl BussErrTracker {
+    fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+    fn set(&self, id: BussErrId) {
+        self.0.fetch_or(id as u8, Ordering::Relaxed);
+    }
+    fn unset(&self, id: BussErrId) {
+        self.0.fetch_and(!(id as u8), Ordering::Relaxed);
+    }
+    fn all_err(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+            == (BussErrId::Bme as u8 | BussErrId::Sht as u8 | BussErrId::Max as u8)
+    }
 }
