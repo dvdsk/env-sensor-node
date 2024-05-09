@@ -17,7 +17,7 @@ pub async fn read<I2C, TX, RX>(
     mut sht: SHT31<SingleShot, I2C>,
     mut bme: Bme680<I2C, impl DelayNs>,
     mut mhz: mhzx::MHZ<TX, RX>,
-    publish: &Channel
+    publish: &Channel,
 ) where
     I2C: I2c,
     I2C::Error: defmt::Format,
@@ -27,7 +27,14 @@ pub async fn read<I2C, TX, RX>(
     RX: embedded_io_async::Read,
     RX::Error: defmt::Format + Into<UartError>,
 {
-    unwrap!(sht.measure().await);
+    // sht works in two steps
+    //  - send measure command before sleep
+    //  - then read
+    if let Err(err) = sht.measure().await {
+        let err = protocol::large_bedroom::SensorError::Sht31(err);
+        let err = protocol::large_bedroom::Error::Running(err);
+        publish.send_error(err)
+    }
     Timer::after_secs(1).await;
 
     loop {
@@ -38,7 +45,6 @@ pub async fn read<I2C, TX, RX>(
         let mhz_measure = with_timeout(Duration::from_millis(100), mhz.read_co2());
         yield_now().await;
         let (bme_res, sht_res, mhz_res) = join::join3(bme_measure, sht_read, mhz_measure).await;
-        // let (bme_res, sht_res) = join::join(bme_measure, sht_read).await;
         yield_now().await;
 
         match bme_res {

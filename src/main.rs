@@ -14,7 +14,7 @@ use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::{IWDG, SPI1};
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::usart::{self, Uart};
+use embassy_stm32::usart::{self, DataBits, StopBits, Uart};
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::Config;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -99,6 +99,10 @@ async fn main(spawner: Spawner) {
     let publish = Channel::new();
     let seed = gen_random_number().await;
 
+    let mut usart_config = usart::Config::default();
+    usart_config.baudrate = 9600;
+    usart_config.data_bits = DataBits::DataBits8;
+    usart_config.stop_bits = StopBits::STOP1;
     let usart = unwrap!(Uart::new(
         p.USART1,
         p.PB7,
@@ -106,7 +110,7 @@ async fn main(spawner: Spawner) {
         Irqs,
         p.DMA2_CH7,
         p.DMA2_CH2,
-        usart::Config::default(),
+        usart_config,
     ));
 
     let i2c = I2c::new(

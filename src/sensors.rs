@@ -15,6 +15,9 @@ use crate::channel::Channel;
 pub mod fast;
 pub mod slow;
 
+// Todo make failed init not critical. Keep trying init in background
+// while we are measuring
+
 pub async fn init_then_measure(
     publish: &Channel,
     i2c: Mutex<NoopRawMutex, I2c<'static, I2C1, Async>>,
@@ -61,7 +64,7 @@ pub async fn init_then_measure(
         .with_accuracy(sht31::Accuracy::High);
 
     let (tx, rx) = usart.split();
-    let mut usart_buf = [0u8; 9*10]; // 9 byte messages
+    let mut usart_buf = [0u8; 9 * 10]; // 9 byte messages
     let rx = rx.into_ring_buffered(&mut usart_buf);
     let mhz = mhzx::MHZ::from_tx_rx(tx, rx);
 

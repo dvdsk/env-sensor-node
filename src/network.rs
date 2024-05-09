@@ -71,6 +71,8 @@ pub async fn send_published(
                 continue;
             } else {
                 info!("(re-)connected");
+                // prevent out-dated data from being send
+                publish.clear().await;
                 network_up.signal(());
             }
         }

@@ -25,6 +25,11 @@ impl Channel {
         }
     }
 
+    pub async fn clear(&self) {
+        while let Ok(_) = self.queue.try_receive() {}
+        self.recent_errors.lock().await.clear();
+    }
+
     pub async fn receive(&self) -> PriorityValue {
         self.queue.receive().await
     }
