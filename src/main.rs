@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use defmt::{info, unwrap};
+use defmt::{error, info, trace, unwrap};
 use embassy_executor::Spawner;
 use embassy_futures::select::Either;
 use embassy_futures::{join, select};
@@ -35,13 +35,11 @@ mod network;
 mod sensors;
 mod channel;
 
-// #[cfg(debug_assertions)]
-// compile_error!("Only works in release mode");
-
 embassy_stm32::bind_interrupts!(struct Irqs {
     I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<embassy_stm32::peripherals::I2C1>;
     I2C1_ER => embassy_stm32::i2c::ErrorInterruptHandler<embassy_stm32::peripherals::I2C1>;
     USART1 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART1>;
+    USART2 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART2>;
 });
 
 type EthernetSPI = ExclusiveDevice<Spi<'static, SPI1, Async>, Output<'static>, Delay>;
@@ -103,13 +101,24 @@ async fn main(spawner: Spawner) {
     usart_config.baudrate = 9600;
     usart_config.data_bits = DataBits::DataBits8;
     usart_config.stop_bits = StopBits::STOP1;
-    let usart = unwrap!(Uart::new(
+    // usart_config.parity = Parity::ParityEven;
+    let usart_mhz = unwrap!(Uart::new(
         p.USART1,
         p.PB7,
         p.PB6,
         Irqs,
         p.DMA2_CH7,
         p.DMA2_CH2,
+        usart_config,
+    ));
+
+    let usart_sps30 = unwrap!(Uart::new(
+        p.USART2,
+        p.PA3,
+        p.PA2,
+        Irqs,
+        p.DMA1_CH6,
+        p.DMA1_CH5,
         usart_config,
     ));
 
@@ -138,12 +147,12 @@ async fn main(spawner: Spawner) {
     // };
 
     let mut spi_cfg = SpiConfig::default();
-    spi_cfg.frequency = Hertz(50_000_000);
+    spi_cfg.frequency = Hertz(50_000_000); // up to 50m works
     let (miso, mosi, clk) = (p.PA6, p.PA7, p.PA5);
     let spi = Spi::new(p.SPI1, clk, mosi, miso, p.DMA2_CH3, p.DMA2_CH0, spi_cfg);
     let cs = Output::new(p.PA4, Level::High, Speed::VeryHigh);
-    let w5500_int = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
-    let w5500_reset = Output::new(p.PA2, Level::High, Speed::Medium);
+    let w5500_int = ExtiInput::new(p.PB0, p.EXTI0, Pull::Up);
+    let w5500_reset = Output::new(p.PB1, Level::High, Speed::VeryHigh);
 
     let mac_addr = [0x02, 234, 3, 4, 82, 231];
     static STATE: StaticCell<State<8, 8>> = StaticCell::new();
@@ -179,14 +188,13 @@ async fn main(spawner: Spawner) {
     // Launch network task
     unwrap!(spawner.spawn(net_task(stack)));
 
-    info!("hi");
     let network_up = Signal::new();
     let send_published = network::send_published(stack, &publish, &network_up);
     pin_mut!(send_published);
     let keep_dog_happy = keep_dog_happy(dog);
     let send_and_pet_dog = join::join(&mut send_published, keep_dog_happy);
 
-    let init_then_measure = sensors::init_then_measure(&publish, i2c, usart);
+    let init_then_measure = sensors::init_then_measure(&publish, i2c, usart_mhz, usart_sps30);
     let init_then_measure = network_up.wait().then(|_| init_then_measure);
     let res = select::select(send_and_pet_dog, init_then_measure).await;
     let unrecoverable_err = match res {
@@ -199,7 +207,7 @@ async fn main(spawner: Spawner) {
         publish.send_critical_error(unrecoverable_err.clone()),
         send_published,
     );
-    defmt::error!("unrecoverable error, resetting: {}", unrecoverable_err);
+    error!("unrecoverable error, resetting: {}", unrecoverable_err);
     send_critical_error.await; // if this takes too long the dog will get us
 }
 
@@ -207,7 +215,7 @@ async fn keep_dog_happy<'a>(mut dog: IndependentWatchdog<'a, IWDG>) {
     loop {
         dog.unleash();
         Timer::after_secs(8).await;
-        info!("petting dog");
+        trace!("petting dog");
         dog.pet();
     }
 }

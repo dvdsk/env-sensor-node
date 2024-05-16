@@ -8,8 +8,8 @@ runner = "probe-rs run --chip STM32F401CCUx"
 target = "thumbv7em-none-eabihf"
 
 [env]
-DEFMT_LOG = "debug,bosch_bme680=info"
-EMBASSY_EXECUTOR_TASK_ARENA_SIZE="5000"
+DEFMT_LOG = "debug,sps30_async=trace,bosch_bme680=info"
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE="8000"
 
 # [unstable]
 # build-std = ["core"]

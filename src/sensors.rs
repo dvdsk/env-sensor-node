@@ -2,13 +2,15 @@ use embassy_embedded_hal::shared_bus;
 use embassy_futures::join;
 use embassy_stm32::i2c::I2c;
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{I2C1, USART1};
+use embassy_stm32::peripherals::{I2C1, USART1, USART2};
 use embassy_stm32::usart::Uart;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{with_timeout, Delay, Duration};
 use max44009::{Max44009, SlaveAddr};
+use mhzx::MHZ;
 use protocol::downcast_err::ConcreteErrorType;
+use sps30_async::Sps30;
 
 use crate::channel::Channel;
 
@@ -21,7 +23,8 @@ pub mod slow;
 pub async fn init_then_measure(
     publish: &Channel,
     i2c: Mutex<NoopRawMutex, I2c<'static, I2C1, Async>>,
-    usart: Uart<'static, USART1, Async>,
+    usart_mhz: Uart<'static, USART1, Async>,
+    usart_sps: Uart<'static, USART2, Async>,
 ) -> Result<(), protocol::large_bedroom::Error> {
     use protocol::large_bedroom::Device;
     use protocol::large_bedroom::Error;
@@ -63,13 +66,18 @@ pub async fn init_then_measure(
         .with_unit(sht31::TemperatureUnit::Celsius)
         .with_accuracy(sht31::Accuracy::High);
 
-    let (tx, rx) = usart.split();
+    let (tx, rx) = usart_mhz.split();
     let mut usart_buf = [0u8; 9 * 10]; // 9 byte messages
     let rx = rx.into_ring_buffered(&mut usart_buf);
-    let mhz = mhzx::MHZ::from_tx_rx(tx, rx);
+    let mhz = MHZ::from_tx_rx(tx, rx);
+
+    let (tx, rx) = usart_sps.split();
+    let mut usart_buf = [0u8; 9 * 10]; // 9 byte messages
+    let rx = rx.into_ring_buffered(&mut usart_buf);
+    let sps30 = Sps30::from_tx_rx(tx, rx, Delay);
 
     let sensors_fast = fast::read(max44009, /*buttons,*/ &publish);
-    let sensors_slow = slow::read(sht, bme, mhz, &publish);
+    let sensors_slow = slow::read(sht, bme, mhz, sps30, &publish);
     join::join(sensors_fast, sensors_slow).await;
 
     defmt::unreachable!();

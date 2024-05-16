@@ -45,7 +45,7 @@ async fn report_lux<I2C>(
             Err(_) => continue,
         };
 
-        let msg = if sig_lux_diff(prev_lux, lux) {
+        if sig_lux_diff(prev_lux, lux) {
             publish.send_p2(LB::Brightness(lux))
         } else if last_lux.elapsed() > MIN_INTERVAL {
             publish.send_p1(LB::Brightness(lux))
