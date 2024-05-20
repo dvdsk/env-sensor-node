@@ -59,11 +59,10 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
         let mhz_measure = with_timeout(Duration::from_millis(100), mhz.read_co2());
         yield_now().await;
         let sps_measure = with_timeout(Duration::from_millis(100), sps.read_measurement());
-        // core::mem::forget(mhz_measure);
-        // yield_now().await;
+        yield_now().await;
         let (bme_res, sht_res, mhz_res, sps_res) =
             join::join4(bme_measure, sht_read, mhz_measure, sps_measure).await;
-        // let (bme_res, sht_res, sps_res) = join::join3(bme_measure, sht_read, sps_measure).await;
+        // let (bme_res, sht_res, mhz_res) = join::join3(bme_measure, sht_read, mhz_measure).await;
         yield_now().await;
 
         publish_bme_result(bme_res, publish);
@@ -72,7 +71,7 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
         yield_now().await;
         publish_mhz_result(mhz_res, publish);
         yield_now().await;
-        publish_sps_result(sps_res, publish);
+        // publish_sps_result(sps_res, publish);
 
         // sht works in two steps
         //  - send measure command before sleep
