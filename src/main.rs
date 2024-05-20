@@ -7,6 +7,7 @@ use embassy_futures::select::Either;
 use embassy_futures::{join, select};
 use embassy_net::{Ipv4Address, Ipv4Cidr, Stack, StackResources};
 use embassy_net_wiznet::{chip::W5500, Device, Runner, State};
+use embassy_stm32::interrupt;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
@@ -29,9 +30,9 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
+mod channel;
 mod network;
 mod sensors;
-mod channel;
 use crate::channel::Channel;
 
 embassy_stm32::bind_interrupts!(struct Irqs {
@@ -40,6 +41,23 @@ embassy_stm32::bind_interrupts!(struct Irqs {
     USART1 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART1>;
     USART2 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART2>;
 });
+
+use embassy_executor::InterruptExecutor;
+static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
+
+use embassy_stm32::interrupt::InterruptExt;
+#[interrupt]
+unsafe fn USART6() {
+    EXECUTOR_HIGH.on_interrupt()
+}
+
+#[embassy_executor::task]
+async fn print_if_running_task() -> ! {
+    loop {
+        Timer::after_secs(1).await;
+        defmt::info!("still running");
+    }
+}
 
 type EthernetSPI = ExclusiveDevice<Spi<'static, SPI1, Async>, Output<'static>, Delay>;
 #[embassy_executor::task]
@@ -193,7 +211,12 @@ async fn main(spawner: Spawner) {
     // Launch network task
     unwrap!(spawner.spawn(net_task(stack)));
 
-    let network_up = Signal::new();
+    embassy_stm32::interrupt::USART6.set_priority(embassy_stm32::interrupt::Priority::P6);
+    let spawner = EXECUTOR_HIGH.start(embassy_stm32::interrupt::USART6);
+    unwrap!(spawner.spawn(print_if_running_task()));
+
+    let network_up: Signal<NoopRawMutex, ()> = Signal::new();
+    network_up.signal(());
     let send_published = network::send_published(stack, &publish, &network_up);
     pin_mut!(send_published);
     let keep_dog_happy = keep_dog_happy(dog);

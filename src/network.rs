@@ -1,3 +1,5 @@
+use core::mem;
+
 use defmt::{info, unwrap, warn};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::TcpSocket;
@@ -12,10 +14,7 @@ use crate::channel::Channel;
 
 type Msg = SensorMessage<6>;
 
-async fn get_messages(
-    publish: &Channel,
-    msg: &mut Msg,
-) {
+async fn get_messages(publish: &Channel, msg: &mut Msg) {
     msg.values.clear();
     let next = publish.receive().await;
     let low_priority = next.low_priority();

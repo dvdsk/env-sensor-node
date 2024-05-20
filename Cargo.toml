@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 embassy-stm32 = { version = "0.1.0", features = [ "defmt", "stm32f401cc",
-"unstable-pac", "memory-x", "time-driver-any", "time", "exti" ]  }
+"unstable-pac", "memory-x", "time-driver-tim1", "time", "exti" ]  }
 embassy-net = { version = "0.4.0", features = ["defmt", "proto-ipv4", "tcp", "dhcpv4","medium-ethernet"] }
 embassy-net-wiznet = { version = "0.1.0", features = ["defmt"] }
 embassy-sync = { version = "0.5.0", features = ["defmt"] }
 embassy-executor = { version = "0.5.0", features = ["arch-cortex-m",
-"executor-thread", "defmt", "integrated-timers"] }
+"executor-thread", "defmt", "integrated-timers", "executor-interrupt"] }
 embassy-embedded-hal = { version = "0.1.0" }
 embassy-time = { version = "0.3.0", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
 embassy-futures = { version = "0.1.0"}
