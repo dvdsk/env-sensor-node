@@ -71,7 +71,7 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
         yield_now().await;
         publish_mhz_result(mhz_res, publish);
         yield_now().await;
-        // publish_sps_result(sps_res, publish);
+        publish_sps_result(sps_res, publish);
 
         // sht works in two steps
         //  - send measure command before sleep
