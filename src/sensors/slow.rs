@@ -59,7 +59,7 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
         let mhz_measure = with_timeout(Duration::from_millis(100), mhz.read_co2());
         yield_now().await;
         let sps_measure = with_timeout(Duration::from_millis(100), sps.read_measurement());
-        yield_now().await;
+        yield_now().await; // with this yield enabled the program hangs within 12 seconds
         let (bme_res, sht_res, mhz_res, sps_res) =
             join::join4(bme_measure, sht_read, mhz_measure, sps_measure).await;
         // let (bme_res, sht_res, mhz_res) = join::join3(bme_measure, sht_read, mhz_measure).await;
