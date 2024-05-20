@@ -72,9 +72,15 @@ pub async fn init_then_measure(
     let mhz = MHZ::from_tx_rx(tx, rx);
 
     let (tx, rx) = usart_sps.split();
-    let mut usart_buf = [0u8; 9 * 10]; // 9 byte messages
+    let mut usart_buf = [0u8; 100];
     let rx = rx.into_ring_buffered(&mut usart_buf);
-    let sps30 = Sps30::from_tx_rx(tx, rx, Delay);
+    defmt::info!("hi");
+    let sps30 = with_timeout(Duration::from_millis(100), Sps30::from_tx_rx(tx, rx, Delay))
+        .await
+        .map_err(|_| Error::SetupTimedOut(Device::Sps30))?
+        .map_err(|err| err.strip_generics())
+        .map_err(SensorError::Sps30)
+        .map_err(Error::Setup)?;
 
     let sensors_fast = fast::read(max44009, /*buttons,*/ &publish);
     let sensors_slow = slow::read(sht, bme, mhz, sps30, &publish);

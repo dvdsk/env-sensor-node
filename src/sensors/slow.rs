@@ -40,19 +40,6 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
     RX2: embedded_io_async::Read,
     RX2::Error: defmt::Format + Into<UartError>,
 {
-    defmt::info!("wtf about to happen?");
-    match with_timeout(Duration::from_millis(100), sps.start_measurement()).await {
-        Err(_timeout) => {
-            let err = protocol::large_bedroom::Error::Timeout(Device::Sps30);
-            publish.send_error(err)
-        }
-        Ok(Err(err)) => {
-            let err = protocol::large_bedroom::SensorError::Sps30(err.strip_generics());
-            let err = protocol::large_bedroom::Error::Running(err);
-            publish.send_error(err)
-        }
-        Ok(Ok(())) => (),
-    }
     // sht works in two steps
     //  - send measure command before sleep
     //  - then read
@@ -63,9 +50,7 @@ pub async fn read<I2C, TX1, RX1, TX2, RX2>(
     }
     Timer::after_secs(1).await;
 
-    defmt::info!("yo");
     loop {
-        defmt::info!("myman");
         let sht_read = with_timeout(Duration::from_millis(100), sht.read());
         yield_now().await;
         let bme_measure = bme.measure();

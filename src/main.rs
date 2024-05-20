@@ -27,13 +27,12 @@ use heapless::Vec;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use static_cell::StaticCell;
 
-use crate::channel::Channel;
-
 use {defmt_rtt as _, panic_probe as _};
 
 mod network;
 mod sensors;
 mod channel;
+use crate::channel::Channel;
 
 embassy_stm32::bind_interrupts!(struct Irqs {
     I2C1_EV => embassy_stm32::i2c::EventInterruptHandler<embassy_stm32::peripherals::I2C1>;
@@ -112,6 +111,11 @@ async fn main(spawner: Spawner) {
         usart_config,
     ));
 
+    let mut usart_config = usart::Config::default();
+    usart_config.baudrate = 115200;
+    usart_config.data_bits = DataBits::DataBits8;
+    usart_config.stop_bits = StopBits::STOP1;
+    // usart_config.parity = Parity::ParityEven;
     let usart_sps30 = unwrap!(Uart::new(
         p.USART2,
         p.PA3,
@@ -151,6 +155,7 @@ async fn main(spawner: Spawner) {
     let (miso, mosi, clk) = (p.PA6, p.PA7, p.PA5);
     let spi = Spi::new(p.SPI1, clk, mosi, miso, p.DMA2_CH3, p.DMA2_CH0, spi_cfg);
     let cs = Output::new(p.PA4, Level::High, Speed::VeryHigh);
+
     let w5500_int = ExtiInput::new(p.PB0, p.EXTI0, Pull::Up);
     let w5500_reset = Output::new(p.PB1, Level::High, Speed::VeryHigh);
 
